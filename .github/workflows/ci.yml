@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # A real Postgres, not sqlite. Every invariant this project claims lives in
+    # Postgres: a DEFERRABLE CONSTRAINT TRIGGER, row-level locking under
+    # concurrent UPDATE, SQLSTATE 23505 vs 23514. Sqlite has none of them, so a
+    # suite that passed against it would be testing nothing that matters --
+    # and would go green on exactly the changes that break production.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ledger"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://ledger:ledger@localhost:5432/ledger_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Migrate
+        run: alembic upgrade head
+
+      # Migrations must be reversible. A downgrade that has never been run is
+      # not a rollback plan, it is a comment -- and the first time anyone needs
+      # it will be during an incident.
+      - name: Check the migrations go back down and up again
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Test
+        run: pytest -q
+
+      # The reconciliation job is the thing that would tell us the ledger has
+      # drifted, so it gets run in CI against a database the suite has just
+      # finished writing to. If it cannot come back clean from the state the
+      # tests leave behind, it would not be trusted on production either.
+      - name: Reconcile
+        run: python -m app.reconcile
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t ledger:${{ github.sha }} .

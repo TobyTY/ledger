@@ -44,6 +44,13 @@ class AccountType(str, enum.Enum):
     """
 
     user_cash = "user_cash"
+
+    #: Cash the customer owns but cannot spend, because an order is open
+    #: against it. A separate account rather than a flag or a reserved-balance
+    #: column: available balance stays SUM(entries) on user_cash with no
+    #: special case, and held funds are covered by the double-entry invariant
+    #: like everything else.
+    user_cash_held = "user_cash_held"
     user_securities = "user_securities"
     house_fees = "house_fees"
     house_settlement = "house_settlement"
@@ -76,6 +83,13 @@ class Transaction(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     kind: Mapped[str] = mapped_column(String, nullable=False)
+
+    #: The transaction this one reverses, if any. UNIQUE in the database, so a
+    #: transaction can be reversed at most once no matter how many callers try
+    #: at the same time.
+    reverses_transaction_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("transactions.id"), nullable=True, unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -106,4 +120,64 @@ class Entry(Base):
     __table_args__ = (
         Index("ix_entries_account_id", "account_id"),
         Index("ix_entries_transaction_id", "transaction_id"),
+    )
+
+
+class HoldState(str, enum.Enum):
+    """Where a hold is in its life. Terminal states are final."""
+
+    active = "active"
+    captured = "captured"
+    released = "released"
+    expired = "expired"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self is not HoldState.active
+
+
+class Hold(Base):
+    """A claim on cash that has not been spent yet.
+
+    Stores no balance of its own. The money sits in `held_account_id` as
+    ordinary entries; this row records which transaction put it there, which
+    one resolved it, and what state the claim is in. Keeping the amount here
+    too is a convenience for checking a capture against its hold without
+    summing entries -- it is not a second source of truth, because the
+    reconciliation job cross-checks it against the entries and fails loudly
+    when the two disagree.
+    """
+
+    __tablename__ = "holds"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    cash_account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id"), nullable=False
+    )
+    held_account_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("accounts.id"), nullable=False
+    )
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False, default=HoldState.active)
+    place_transaction_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("transactions.id"), nullable=False
+    )
+    resolve_transaction_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("transactions.id"), nullable=True
+    )
+    captured_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_holds_cash_account_id", "cash_account_id"),
+        Index("ix_holds_state", "state"),
     )

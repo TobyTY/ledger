@@ -1,0 +1,27 @@
+# Render blueprint. Deploys from the Dockerfile, so the build happens
+# server-side and nothing depends on Docker being installed locally.
+services:
+  - type: web
+    name: ledger
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Paste the Neon DIRECT (non-pooler) connection string here, or wire it
+      # to a Render Postgres instance. The pooler is a transaction pooler and
+      # Alembic's advisory lock does not survive it.
+      - key: DATABASE_URL
+        sync: false
+
+  # Reconciliation is a scheduled job, not an endpoint anyone remembers to
+  # visit. It exits non-zero when the ledger has drifted, so a failed run is a
+  # failed cron run and shows up without anyone having to read the output.
+  - type: cron
+    name: ledger-reconcile
+    runtime: docker
+    plan: free
+    schedule: "0 * * * *"
+    dockerCommand: python -m app.reconcile
+    envVars:
+      - key: DATABASE_URL
+        sync: false

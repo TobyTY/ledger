@@ -20,7 +20,12 @@ def session():
     """
     with SessionLocal() as s:
         s.execute(text("ALTER TABLE entries DISABLE TRIGGER entries_no_mutation"))
-        s.execute(text("TRUNCATE entries, transactions, accounts RESTART IDENTITY CASCADE"))
+        s.execute(
+            text(
+                "TRUNCATE holds, entries, transactions, accounts "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         s.execute(text("ALTER TABLE entries ENABLE TRIGGER entries_no_mutation"))
         s.commit()
         yield s
