@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy.exc import IntegrityError, InternalError
+from sqlalchemy.exc import DatabaseError, IntegrityError, InternalError
 
 from app.db import SessionLocal
 from app.holds import (
@@ -427,7 +427,11 @@ def test_the_database_refuses_a_resolved_hold_with_no_resolution(
     )
     from sqlalchemy import text
 
-    with pytest.raises((IntegrityError, InternalError)):
+    # DatabaseError rather than IntegrityError: psycopg raises the latter and
+    # pg8000 the former for the same refusal, and which one appears says
+    # nothing about whether the constraint exists. IntegrityError and
+    # InternalError are both subclasses, so this still catches them.
+    with pytest.raises(DatabaseError):
         session.execute(
             text("UPDATE holds SET state = 'captured' WHERE id = :id"),
             {"id": result.hold.id},
@@ -442,7 +446,7 @@ def test_the_database_refuses_an_unknown_hold_state(session, funded, idem_key):
     result = place_hold(
         session, idempotency_key=idem_key, cash_account=funded, amount_minor=1_000_00
     )
-    with pytest.raises((IntegrityError, InternalError)):
+    with pytest.raises(DatabaseError):
         session.execute(
             text("UPDATE holds SET state = 'banana' WHERE id = :id"),
             {"id": result.hold.id},

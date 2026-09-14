@@ -7,10 +7,17 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
 from app.db import SessionLocal
-from app.ledger import Leg, Unbalanced, account_balance, post_transaction
+from app.ledger import (
+    CHECK_VIOLATION,
+    Leg,
+    Unbalanced,
+    _sqlstate,
+    account_balance,
+    post_transaction,
+)
 from app.models import Entry, Transaction
 
 DEPOSIT = 100_000  # ₹1,000.00 in paise
@@ -73,13 +80,18 @@ def test_database_rejects_unbalanced_even_without_the_app_guard(
     """
     monkeypatch.setattr("app.ledger._assert_balanced", lambda legs: None)
 
-    with pytest.raises(IntegrityError) as exc_info:
+    # Asserted on the SQLSTATE, not the exception class. 23514 is the contract;
+    # the class wrapping it is the driver's choice, and pinning the class makes
+    # this test pass or fail on which driver happens to be installed -- which
+    # has nothing to do with whether the database refuses an unbalanced write.
+    with pytest.raises(DatabaseError) as exc_info:
         post_transaction(
             session,
             idempotency_key=idem_key,
             kind="deposit",
             legs=[Leg(cash_account.id, DEPOSIT), Leg(settlement_account.id, -1)],
         )
+    assert _sqlstate(exc_info.value) == CHECK_VIOLATION
     assert "does not balance" in str(exc_info.value)
 
     session.rollback()
