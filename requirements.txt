@@ -6,3 +6,8 @@ psycopg[binary]>=3.2
 python-dotenv>=1.0
 pytest>=8.0
 httpx>=0.28
+
+# Fallback driver only. psycopg is what CI and Render run; pg8000 is pure
+# Python and exists for machines where a security policy blocks libpq.
+# Select with LEDGER_DRIVER=pg8000.
+pg8000==1.31.5

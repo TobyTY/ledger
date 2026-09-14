@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DatabaseError, DBAPIError, IntegrityError
 
+from app.ledger import CHECK_VIOLATION, _sqlstate
 from app.models import Entry, Transaction
 
 
@@ -43,6 +44,13 @@ def test_unbalanced_transaction_fails_at_commit_not_at_insert(
     insert must succeed and the commit must fail. This test asserts both halves
     of that, which is what proves the constraint is deferred rather than merely
     present.
+
+    The assertion is on the SQLSTATE rather than the exception class, and that
+    is not pedantry. 23514 is the contract; the Python class wrapping it is the
+    driver's choice. psycopg raises IntegrityError here and pg8000 raises
+    DatabaseError, so a test that pins the class passes or fails on which
+    driver happens to be installed -- which has nothing to do with whether the
+    constraint is deferred.
     """
     txn = Transaction(idempotency_key=idem_key, kind="deposit")
     session.add(txn)
@@ -54,9 +62,10 @@ def test_unbalanced_transaction_fails_at_commit_not_at_insert(
     # is legal right up until commit.
     session.flush()
 
-    with pytest.raises(IntegrityError) as exc_info:
+    with pytest.raises(DatabaseError) as exc_info:
         session.commit()
 
+    assert _sqlstate(exc_info.value) == CHECK_VIOLATION
     assert "does not balance" in str(exc_info.value)
 
 

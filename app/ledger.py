@@ -39,9 +39,38 @@ class Leg:
     amount_minor: int
 
 
-def _sqlstate(exc: IntegrityError) -> str | None:
+def _sqlstate(exc: Exception) -> str | None:
+    """The five-character SQLSTATE, whichever driver raised the error.
+
+    Driver-agnostic on purpose, and not for portability points. Every decision
+    in this module turns on the difference between 23505 and 23514, and each
+    driver exposes that code somewhere different:
+
+        psycopg3   exc.orig.sqlstate
+        psycopg2   exc.orig.pgcode
+        pg8000     exc.orig.args[0]["C"]   -- a dict of the Postgres wire
+                                              protocol's single-letter error
+                                              fields; "C" is the SQLSTATE
+
+    A version of this function that only knew psycopg returned None under
+    pg8000, which made `is_unique_violation` answer False to every question.
+    That does not raise anything. It just stops the idempotency race from being
+    recognised, so the loser of a race reports a failure instead of returning
+    the winner's transaction -- a silent behaviour change that no test of the
+    happy path would notice.
+    """
     orig = getattr(exc, "orig", None)
-    return getattr(orig, "sqlstate", None)
+    if orig is None:
+        return None
+
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if code:
+        return str(code)
+
+    args = getattr(orig, "args", ())
+    if args and isinstance(args[0], dict):
+        return args[0].get("C")
+    return None
 
 
 def is_unique_violation(exc: IntegrityError) -> bool:
